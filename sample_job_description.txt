@@ -1,0 +1,10 @@
+Python Developer Intern
+
+We are looking for a Python Developer Intern with basic knowledge of Python, HTML, CSS, SQL, GitHub, teamwork, communication, and problem solving.
+
+Responsibilities:
+- Build simple Python applications
+- Work with team members
+- Use GitHub for project submission
+- Understand basic database concepts
+- Communicate project progress clearly
