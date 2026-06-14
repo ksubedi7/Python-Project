@@ -26,15 +26,14 @@ SOFT_SKILLS = [
 # -----------------------------
 # AI Configuration
 # -----------------------------
-OPENROUTER_API_KEY = "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"
 MODEL = "openai/gpt-oss-120b"
 
-def call_ai(prompt):
+def call_ai(prompt, api_key):
     try:
         response = requests.post(
             url="https://openrouter.ai/api/v1/chat/completions",
             headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json"
             },
             data=json.dumps({
@@ -135,19 +134,19 @@ def calculate_match(resume_skills, job_skills):
     return percentage, sorted(matched), sorted(missing)
 
 # Agrata Shrestha's AI Integrations:
-def rate_resume_ai(match_percentage, resume_text):
+def rate_resume_ai(match_percentage, resume_text, api_key):
     prompt = f"""
 You are an expert technical recruiter. Based on a skill match percentage of {match_percentage}% and the following resume text, rate the resume as EXACTLY ONE of the following: Basic, Intermediate, or Top-Tier. Return ONLY the rating word and nothing else.
 
 Resume Text:
 {resume_text[:2000]}
 """
-    result = call_ai(prompt)
+    result = call_ai(prompt, api_key)
     if "top" in result.lower(): return "Top-Tier"
     if "inter" in result.lower(): return "Intermediate"
     return "Basic"
 
-def ats_check_ai(resume_text):
+def ats_check_ai(resume_text, api_key):
     prompt = f"""
 You are an ATS (Applicant Tracking System) expert. Analyze the following resume text for ATS compatibility. Score it out of 100 and identify up to 3 specific formatting or content issues.
 Return ONLY raw JSON with keys "score" (integer) and "issues" (list of strings). Do not use markdown blocks.
@@ -156,13 +155,13 @@ Resume Text:
 {resume_text[:2000]}
 """
     try:
-        result = call_ai(prompt)
+        result = call_ai(prompt, api_key)
         data = extract_json_from_response(result)
         return int(data.get("score", 50)), data.get("issues", [])
     except:
         return 50, ["Could not analyze ATS compatibility via AI.", "Please try again later."]
 
-def generate_questions_ai(resume_text, job_description):
+def generate_questions_ai(resume_text, job_description, api_key):
     prompt = f"""
 You are an expert technical interviewer. Based on the following resume and job description, generate 3 Technical interview questions, 2 HR interview questions, and 2 Behavioral interview questions.
 Return ONLY a raw JSON list of strings containing all 7 questions. Do not use markdown blocks.
@@ -174,12 +173,12 @@ Job Description:
 {job_description[:1000]}
 """
     try:
-        result = call_ai(prompt)
+        result = call_ai(prompt, api_key)
         return extract_json_from_response(result)
     except:
         return ["Could not generate AI questions.", "Please check API connection."]
 
-def give_suggestions_ai(resume_text, job_description):
+def give_suggestions_ai(resume_text, job_description, api_key):
     prompt = f"""
 You are a career coach. Provide 3 specific, actionable suggestions to improve the following resume for the provided job description.
 Return ONLY a raw JSON list of strings containing the suggestions. Do not use markdown blocks.
@@ -191,7 +190,7 @@ Job Description:
 {job_description[:1000]}
 """
     try:
-        result = call_ai(prompt)
+        result = call_ai(prompt, api_key)
         return extract_json_from_response(result)
     except:
         return ["Could not generate AI suggestions.", "Please check API connection."]
@@ -206,6 +205,10 @@ st.set_page_config(
     page_icon="🤖",
     layout="wide"
 )
+
+# Sidebar for API Key
+st.sidebar.header("Configuration")
+api_key_input = st.sidebar.text_input("OpenRouter API Key", type="password", help="Enter your OpenRouter API key to enable AI features.")
 
 st.title("AI-Powered Interview Question Generator and Resume Analysis System")
 
@@ -227,7 +230,9 @@ uploaded_file = st.file_uploader("Upload Resume PDF or DOCX", type=["pdf", "docx
 job_description = st.text_area("Paste Job Description", height=180)
 
 if st.button("Analyze Resume"):
-    if uploaded_file is None:
+    if not api_key_input.strip():
+        st.error("Please enter your OpenRouter API Key in the sidebar before analyzing.")
+    elif uploaded_file is None:
         st.error("Please upload a resume.")
     elif job_description.strip() == "":
         st.error("Please paste a job description.")
@@ -244,10 +249,10 @@ if st.button("Analyze Resume"):
                 match_percentage, matched_skills, missing_skills = calculate_match(resume_skills, job_skills)
                 
                 # Agrata's AI Features
-                rating = rate_resume_ai(match_percentage, resume_text)
-                ats_score, ats_issues = ats_check_ai(resume_text)
-                questions = generate_questions_ai(resume_text, job_description)
-                suggestions = give_suggestions_ai(resume_text, job_description)
+                rating = rate_resume_ai(match_percentage, resume_text, api_key_input.strip())
+                ats_score, ats_issues = ats_check_ai(resume_text, api_key_input.strip())
+                questions = generate_questions_ai(resume_text, job_description, api_key_input.strip())
+                suggestions = give_suggestions_ai(resume_text, job_description, api_key_input.strip())
 
                 st.success("Resume analysis completed.")
 
