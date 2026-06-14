@@ -4,6 +4,8 @@ from docx import Document
 import tempfile
 import os
 import re
+import requests
+import json
 
 # -----------------------------
 # Basic skill lists
@@ -21,6 +23,51 @@ SOFT_SKILLS = [
     "time management", "creativity", "adaptability", "presentation"
 ]
 
+# -----------------------------
+# AI Configuration
+# -----------------------------
+OPENROUTER_API_KEY = "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"
+MODEL = "openai/gpt-oss-120b"
+
+def call_ai(prompt):
+    try:
+        response = requests.post(
+            url="https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            data=json.dumps({
+                "model": MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7
+            }),
+            timeout=60
+        )
+        if response.status_code == 200:
+            return response.json()['choices'][0]['message']['content'].strip()
+        else:
+            print(f"API Error: {response.text}")
+            return f"Error from AI: {response.status_code}"
+    except Exception as e:
+        print(f"Exception: {str(e)}")
+        return f"Error connecting to AI: {str(e)}"
+
+def extract_json_from_response(text):
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.strip("` \n")
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Failsafe if the model returned raw text instead of JSON
+        import re
+        match = re.search(r'\[.*\]|\{.*\}', text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        return {}
 
 # -----------------------------
 # File reading functions
@@ -35,7 +82,6 @@ def read_pdf(file):
                 text += page_text + "\n"
     return text
 
-
 def read_docx(file):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as temp_file:
         temp_file.write(file.read())
@@ -49,7 +95,6 @@ def read_docx(file):
     os.remove(temp_path)
     return text
 
-
 def extract_text(uploaded_file):
     if uploaded_file.name.endswith(".pdf"):
         return read_pdf(uploaded_file)
@@ -57,7 +102,6 @@ def extract_text(uploaded_file):
         return read_docx(uploaded_file)
     else:
         return ""
-
 
 # -----------------------------
 # Analysis functions
@@ -69,17 +113,13 @@ def clean_text(text):
     text = re.sub(r"\s+", " ", text)
     return text
 
-
 def find_skills(text):
     text = clean_text(text)
     found = []
-
     for skill in TECHNICAL_SKILLS:
         if skill in text:
             found.append(skill.title())
-
     return sorted(list(set(found)))
-
 
 def calculate_match(resume_skills, job_skills):
     resume_set = set(skill.lower() for skill in resume_skills)
@@ -92,84 +132,69 @@ def calculate_match(resume_skills, job_skills):
     missing = job_set.difference(resume_set)
 
     percentage = round((len(matched) / len(job_set)) * 100, 2)
-
     return percentage, sorted(matched), sorted(missing)
 
+# Agrata Shrestha's AI Integrations:
+def rate_resume_ai(match_percentage, resume_text):
+    prompt = f"""
+You are an expert technical recruiter. Based on a skill match percentage of {match_percentage}% and the following resume text, rate the resume as EXACTLY ONE of the following: Basic, Intermediate, or Top-Tier. Return ONLY the rating word and nothing else.
 
-def rate_resume(match_percentage, resume_text):
-    word_count = len(resume_text.split())
+Resume Text:
+{resume_text[:2000]}
+"""
+    result = call_ai(prompt)
+    if "top" in result.lower(): return "Top-Tier"
+    if "inter" in result.lower(): return "Intermediate"
+    return "Basic"
 
-    if match_percentage >= 70 and word_count >= 200:
-        return "Top-Tier"
-    elif match_percentage >= 40:
-        return "Intermediate"
-    else:
-        return "Basic"
+def ats_check_ai(resume_text):
+    prompt = f"""
+You are an ATS (Applicant Tracking System) expert. Analyze the following resume text for ATS compatibility. Score it out of 100 and identify up to 3 specific formatting or content issues.
+Return ONLY raw JSON with keys "score" (integer) and "issues" (list of strings). Do not use markdown blocks.
 
+Resume Text:
+{resume_text[:2000]}
+"""
+    try:
+        result = call_ai(prompt)
+        data = extract_json_from_response(result)
+        return int(data.get("score", 50)), data.get("issues", [])
+    except:
+        return 50, ["Could not analyze ATS compatibility via AI.", "Please try again later."]
 
-def ats_check(resume_text):
-    text = resume_text.lower()
-    score = 100
-    issues = []
+def generate_questions_ai(resume_text, job_description):
+    prompt = f"""
+You are an expert technical interviewer. Based on the following resume and job description, generate 3 Technical interview questions, 2 HR interview questions, and 2 Behavioral interview questions.
+Return ONLY a raw JSON list of strings containing all 7 questions. Do not use markdown blocks.
 
-    sections = ["education", "skills", "experience", "project"]
+Resume:
+{resume_text[:2000]}
 
-    for section in sections:
-        if section not in text:
-            score -= 15
-            issues.append(f"Add a clear {section.title()} section.")
+Job Description:
+{job_description[:1000]}
+"""
+    try:
+        result = call_ai(prompt)
+        return extract_json_from_response(result)
+    except:
+        return ["Could not generate AI questions.", "Please check API connection."]
 
-    if len(resume_text.split()) < 150:
-        score -= 10
-        issues.append("Resume is too short. Add more details.")
+def give_suggestions_ai(resume_text, job_description):
+    prompt = f"""
+You are a career coach. Provide 3 specific, actionable suggestions to improve the following resume for the provided job description.
+Return ONLY a raw JSON list of strings containing the suggestions. Do not use markdown blocks.
 
-    if score < 0:
-        score = 0
+Resume:
+{resume_text[:2000]}
 
-    if not issues:
-        issues.append("Resume looks ATS-friendly.")
-
-    return score, issues
-
-
-def generate_questions(resume_skills, missing_skills):
-    questions = []
-
-    questions.append("Tell me about yourself.")
-    questions.append("Why are you interested in this job role?")
-    questions.append("What are your strengths and weaknesses?")
-
-    for skill in resume_skills[:5]:
-        questions.append(f"Can you explain your experience with {skill}?")
-
-    for skill in missing_skills[:3]:
-        questions.append(f"This job requires {skill.title()}. How will you improve this skill?")
-
-    questions.append("Describe one project you have worked on.")
-    questions.append("Tell me about a time you worked in a team.")
-    questions.append("Why should we hire you?")
-
-    return questions
-
-
-def give_suggestions(missing_skills, rating):
-    suggestions = []
-
-    if missing_skills:
-        suggestions.append("Add these missing job-related skills to your resume if you have them: " + ", ".join(skill.title() for skill in missing_skills))
-
-    if rating == "Basic":
-        suggestions.append("Add more project details, technical skills, and work experience.")
-        suggestions.append("Use clear headings like Education, Skills, Experience, and Projects.")
-
-    elif rating == "Intermediate":
-        suggestions.append("Your resume is decent, but it needs more job-specific keywords.")
-        suggestions.append("Add measurable achievements in your project and experience sections.")
-
-    else:
-        suggestions.append("Your resume is strong. Keep it updated and customize it for every job.")
-
-    return suggestions
+Job Description:
+{job_description[:1000]}
+"""
+    try:
+        result = call_ai(prompt)
+        return extract_json_from_response(result)
+    except:
+        return ["Could not generate AI suggestions.", "Please check API connection."]
 
 
 # -----------------------------
@@ -193,7 +218,7 @@ and provides resume improvement recommendations.
 **Project Submitted By:** Agrata Shrestha  
 **Group Members:** Arvin Tandukar, Kashyap Subedi, Angel Thapa, Agrata Shrestha
 
-**Technology Stack:** Python, Streamlit, PDF Processing, Resume Analysis
+**Technology Stack:** Python, Streamlit, PDF Processing, Resume Analysis (Powered by OpenRouter LLM)
 
 ---
 """)
@@ -207,63 +232,64 @@ if st.button("Analyze Resume"):
     elif job_description.strip() == "":
         st.error("Please paste a job description.")
     else:
-        resume_text = extract_text(uploaded_file)
+        with st.spinner("Analyzing with AI... (This may take a moment)"):
+            resume_text = extract_text(uploaded_file)
 
-        if resume_text.strip() == "":
-            st.error("Could not read the resume. Please try another file.")
-        else:
-            resume_skills = find_skills(resume_text)
-            job_skills = find_skills(job_description)
+            if resume_text.strip() == "":
+                st.error("Could not read the resume. Please try another file.")
+            else:
+                resume_skills = find_skills(resume_text)
+                job_skills = find_skills(job_description)
 
-            match_percentage, matched_skills, missing_skills = calculate_match(resume_skills, job_skills)
-            rating = rate_resume(match_percentage, resume_text)
-            ats_score, ats_issues = ats_check(resume_text)
-            questions = generate_questions(resume_skills, missing_skills)
-            suggestions = give_suggestions(missing_skills, rating)
+                match_percentage, matched_skills, missing_skills = calculate_match(resume_skills, job_skills)
+                
+                # Agrata's AI Features
+                rating = rate_resume_ai(match_percentage, resume_text)
+                ats_score, ats_issues = ats_check_ai(resume_text)
+                questions = generate_questions_ai(resume_text, job_description)
+                suggestions = give_suggestions_ai(resume_text, job_description)
 
-            st.success("Resume analysis completed.")
+                st.success("Resume analysis completed.")
 
-            st.subheader("Result Summary")
+                st.subheader("Result Summary")
 
-            col1, col2, col3 = st.columns(3)
+                col1, col2, col3 = st.columns(3)
 
-            with col1:
-                st.metric("Skill Match", f"{match_percentage}%")
+                with col1:
+                    st.metric("Skill Match", f"{match_percentage}%")
 
-            with col2:
-                st.metric("Resume Rating", rating)
+                with col2:
+                    st.metric("Resume Rating", rating)
 
-            with col3:
-                st.metric("ATS Score", f"{ats_score}%")
+                with col3:
+                    st.metric("ATS Score", f"{ats_score}%")
 
+                st.subheader("Skills Found in Resume")
+                st.write(resume_skills if resume_skills else "No skills found.")
 
+                st.subheader("Skills Required by Job")
+                st.write(job_skills if job_skills else "No job skills found.")
 
-            st.subheader("Skills Found in Resume")
-            st.write(resume_skills if resume_skills else "No skills found.")
+                st.subheader("Matched Skills")
+                st.write([skill.title() for skill in matched_skills] if matched_skills else "No matched skills.")
 
-            st.subheader("Skills Required by Job")
-            st.write(job_skills if job_skills else "No job skills found.")
+                st.subheader("Missing Skills")
+                st.write([skill.title() for skill in missing_skills] if missing_skills else "No missing skills.")
 
-            st.subheader("Matched Skills")
-            st.write([skill.title() for skill in matched_skills] if matched_skills else "No matched skills.")
+                st.subheader("Resume Improvement Suggestions (AI)")
+                for suggestion in suggestions:
+                    st.write("- " + str(suggestion))
 
-            st.subheader("Missing Skills")
-            st.write([skill.title() for skill in missing_skills] if missing_skills else "No missing skills.")
+                st.subheader("ATS Compatibility Issues (AI)")
+                for issue in ats_issues:
+                    st.write("- " + str(issue))
 
-            st.subheader("Resume Improvement Suggestions")
-            for suggestion in suggestions:
-                st.write("- " + suggestion)
+                st.subheader("Generated Interview Questions (AI)")
+                for i, question in enumerate(questions, start=1):
+                    st.write(f"{i}. {str(question)}")
 
-            st.subheader("ATS Compatibility Issues")
-            for issue in ats_issues:
-                st.write("- " + issue)
-
-            st.subheader("Generated Interview Questions")
-            for i, question in enumerate(questions, start=1):
-                st.write(f"{i}. {question}")
-
-            with st.expander("View Extracted Resume Text"):
-                st.write(resume_text)
+                with st.expander("View Extracted Resume Text"):
+                    st.write(resume_text)
 
 st.markdown("---")
 st.caption("AI-Powered Interview Question Generator and Resume Analysis System")
